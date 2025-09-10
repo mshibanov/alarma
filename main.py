@@ -1,8 +1,10 @@
 import os
 import logging
 import re
+import asyncio
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
+from telegram.error import Conflict, RetryAfter
 import requests
 from bs4 import BeautifulSoup
 
@@ -245,7 +247,15 @@ def main() -> None:
     """Запускает бота в polling режиме"""
     logger.info("🚀 Запуск бота в polling режиме...")
 
-    application = Application.builder().token(BOT_TOKEN).build()
+    # Создаем Application с обработкой конфликтов
+    application = Application.builder() \
+        .token(BOT_TOKEN) \
+        .read_timeout(30) \
+        .write_timeout(30) \
+        .connect_timeout(30) \
+        .pool_timeout(30) \
+        .build()
+
     application.add_error_handler(error_handler)
 
     # Обработчик диалога
@@ -265,9 +275,23 @@ def main() -> None:
 
     application.add_handler(conv_handler)
 
-    # Запускаем polling
+    # Запускаем polling с обработкой ошибок
     logger.info("✅ Бот запущен и ожидает сообщений...")
-    application.run_polling()
+
+    try:
+        application.run_polling(
+            drop_pending_updates=True,  # Важно: игнорирует старые сообщения
+            allowed_updates=Update.ALL_TYPES,
+            close_loop=False
+        )
+    except Conflict as e:
+        logger.error(f"⚠️ Конфликт: другой экземпляр бота уже запущен. {e}")
+        logger.info("🔄 Перезапуск через 10 секунд...")
+        asyncio.run(asyncio.sleep(10))
+        main()  # Рекурсивный перезапуск
+    except Exception as e:
+        logger.error(f"💥 Критическая ошибка: {e}")
+        raise
 
 
 if __name__ == '__main__':
